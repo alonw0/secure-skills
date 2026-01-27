@@ -353,18 +353,32 @@ export class WellKnownProvider implements HostProvider {
 
   /**
    * Get the source identifier for telemetry/storage.
-   * Includes the path if present (e.g., "wellknown/example.com/docs").
+   * Returns the domain in owner/repo format: second-level-domain/top-level-domain.
+   * e.g., "mintlify.com" → "mintlify/com", "lovable.dev" → "lovable/dev"
+   * This matches the owner/repo pattern used by GitHub sources for consistency in the leaderboard.
    */
   getSourceIdentifier(url: string): string {
     try {
       const parsed = new URL(url);
-      const basePath = parsed.pathname.replace(/\/$/, '').replace(/^\/?/, '');
-      if (basePath) {
-        return `wellknown/${parsed.hostname}/${basePath}`;
+      // Extract the main domain (ignore subdomains like "docs." or "api.")
+      const hostParts = parsed.hostname.split('.');
+
+      // Handle common cases:
+      // - example.com → example/com
+      // - docs.example.com → example/com (strip subdomain)
+      // - example.co.uk → example/co.uk (keep compound TLD)
+
+      if (hostParts.length >= 2) {
+        // Get the last two parts as the main domain
+        const tld = hostParts[hostParts.length - 1]; // com, dev, io, etc.
+        const sld = hostParts[hostParts.length - 2]; // mintlify, lovable, etc.
+        return `${sld}/${tld}`;
       }
-      return `wellknown/${parsed.hostname}`;
+
+      // Fallback for unusual hostnames
+      return parsed.hostname.replace('.', '/');
     } catch {
-      return 'wellknown/unknown';
+      return 'unknown/unknown';
     }
   }
 

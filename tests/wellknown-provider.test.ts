@@ -36,23 +36,20 @@ describe('WellKnownProvider', () => {
   });
 
   describe('getSourceIdentifier', () => {
-    it('should return wellknown/hostname for root URLs', () => {
-      expect(provider.getSourceIdentifier('https://example.com')).toBe('wellknown/example.com');
+    it('should return domain in owner/repo format (sld/tld)', () => {
+      expect(provider.getSourceIdentifier('https://example.com')).toBe('example/com');
+      expect(provider.getSourceIdentifier('https://mintlify.com')).toBe('mintlify/com');
+      expect(provider.getSourceIdentifier('https://lovable.dev')).toBe('lovable/dev');
     });
 
-    it('should include path in identifier', () => {
-      expect(provider.getSourceIdentifier('https://example.com/docs')).toBe(
-        'wellknown/example.com/docs'
-      );
-      expect(provider.getSourceIdentifier('https://example.com/api/v1')).toBe(
-        'wellknown/example.com/api/v1'
-      );
+    it('should return same identifier regardless of path', () => {
+      expect(provider.getSourceIdentifier('https://example.com/docs')).toBe('example/com');
+      expect(provider.getSourceIdentifier('https://example.com/api/v1')).toBe('example/com');
     });
 
-    it('should handle trailing slashes', () => {
-      expect(provider.getSourceIdentifier('https://example.com/docs/')).toBe(
-        'wellknown/example.com/docs'
-      );
+    it('should strip subdomains and use main domain', () => {
+      expect(provider.getSourceIdentifier('https://docs.example.com')).toBe('example/com');
+      expect(provider.getSourceIdentifier('https://api.mintlify.com/docs')).toBe('mintlify/com');
     });
   });
 
