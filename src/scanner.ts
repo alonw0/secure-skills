@@ -1,6 +1,7 @@
 import { readFile } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve, isAbsolute } from 'path';
 import { readdir, stat } from 'fs/promises';
+import { readFileSync, existsSync, statSync, readdirSync } from 'fs';
 import type { Skill, RemoteSkill } from './types.ts';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -25,11 +26,24 @@ export interface ScanResult {
   urls: string[];
 }
 
-interface ScanRule {
+export interface ScanRule {
   id: string;
   severity: ScanSeverity;
   description: string;
   pattern: RegExp;
+}
+
+/**
+ * JSON-serializable representation of a scan rule for external rules files.
+ * The `pattern` field is a regex string (without delimiters), and `flags`
+ * provides optional regex flags (defaults to "i" for case-insensitive).
+ */
+export interface ExternalRuleDefinition {
+  id: string;
+  severity: ScanSeverity;
+  description: string;
+  pattern: string;
+  flags?: string;
 }
 
 // ── Severity ordering ────────────────────────────────────────────────────────
@@ -411,20 +425,164 @@ export const SCAN_RULES: ScanRule[] = [
   },
 ];
 
+// ── External rules loading ───────────────────────────────────────────────────
+
+const VALID_SEVERITIES = new Set<ScanSeverity>(['critical', 'high', 'medium', 'low', 'info']);
+
+/**
+ * Validate and convert an external rule definition into an internal ScanRule.
+ * Throws descriptive errors for invalid rules.
+ */
+export function parseExternalRule(def: ExternalRuleDefinition, source: string): ScanRule {
+  if (!def.id || typeof def.id !== 'string') {
+    throw new Error(`Rule in ${source} is missing a valid "id" field`);
+  }
+  if (!def.severity || !VALID_SEVERITIES.has(def.severity)) {
+    throw new Error(
+      `Rule "${def.id}" in ${source} has invalid severity "${def.severity}". ` +
+        `Must be one of: critical, high, medium, low, info`
+    );
+  }
+  if (!def.description || typeof def.description !== 'string') {
+    throw new Error(`Rule "${def.id}" in ${source} is missing a valid "description" field`);
+  }
+  if (!def.pattern || typeof def.pattern !== 'string') {
+    throw new Error(
+      `Rule "${def.id}" in ${source} is missing a valid "pattern" field (regex string)`
+    );
+  }
+
+  try {
+    const flags = def.flags ?? 'i';
+    const pattern = new RegExp(def.pattern, flags);
+    return {
+      id: def.id,
+      severity: def.severity,
+      description: def.description,
+      pattern,
+    };
+  } catch (err) {
+    throw new Error(
+      `Rule "${def.id}" in ${source} has invalid regex pattern: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+/**
+ * Load external rules from a JSON file.
+ * The file must contain an object with a "rules" array:
+ *
+ * ```json
+ * {
+ *   "rules": [
+ *     {
+ *       "id": "my-rule",
+ *       "severity": "high",
+ *       "description": "Detects something dangerous",
+ *       "pattern": "dangerous\\s+pattern",
+ *       "flags": "i"
+ *     }
+ *   ]
+ * }
+ * ```
+ */
+export function loadExternalRulesFromFile(filePath: string): ScanRule[] {
+  const absPath = isAbsolute(filePath) ? filePath : resolve(filePath);
+
+  if (!existsSync(absPath)) {
+    throw new Error(`External rules file not found: ${absPath}`);
+  }
+
+  const stats = statSync(absPath);
+  if (!stats.isFile()) {
+    throw new Error(`External rules path is not a regular file: ${absPath}`);
+  }
+  const content = readFileSync(absPath, 'utf-8');
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new Error(`Failed to parse ${absPath} as JSON. External rules files must be valid JSON.`);
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(`Invalid rules file ${absPath}: must be a JSON object with a "rules" array`);
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  const rulesArray = obj.rules;
+
+  if (!Array.isArray(rulesArray)) {
+    throw new Error(`Invalid rules file ${absPath}: must contain a "rules" array at the top level`);
+  }
+
+  return rulesArray.map((def: unknown, index: number) => {
+    if (!def || typeof def !== 'object') {
+      throw new Error(`Rule at index ${index} in ${absPath} is not a valid object`);
+    }
+    return parseExternalRule(def as ExternalRuleDefinition, absPath);
+  });
+}
+
+/**
+ * Load external rules from a path, which can be:
+ * - A single `.json` file
+ * - A directory containing `.json` files (non-recursive)
+ *
+ * Returns all parsed rules. Throws on any validation error.
+ */
+export function loadExternalRules(rulesPath: string): ScanRule[] {
+  const absPath = isAbsolute(rulesPath) ? rulesPath : resolve(rulesPath);
+
+  if (!existsSync(absPath)) {
+    throw new Error(`External rules path not found: ${absPath}`);
+  }
+
+  const stats = statSync(absPath);
+
+  if (stats.isFile()) {
+    return loadExternalRulesFromFile(absPath);
+  }
+
+  if (stats.isDirectory()) {
+    const entries = readdirSync(absPath, { encoding: 'utf-8' });
+    const jsonFiles = entries.filter((e) => e.endsWith('.json')).sort();
+
+    if (jsonFiles.length === 0) {
+      throw new Error(`No .json rule files found in directory: ${absPath}`);
+    }
+
+    const allRules: ScanRule[] = [];
+    for (const file of jsonFiles) {
+      allRules.push(...loadExternalRulesFromFile(join(absPath, file)));
+    }
+    return allRules;
+  }
+
+  throw new Error(`External rules path is not a file or directory: ${absPath}`);
+}
+
 // ── Core scan function ───────────────────────────────────────────────────────
 
 // URL extraction pattern — matches http(s) URLs, excluding trailing punctuation/markdown
 const URL_PATTERN = /https?:\/\/[^\s)<>"'`]+/gi;
 
-export function scanSkillContent(skillName: string, files: Map<string, string>): ScanResult {
+export function scanSkillContent(
+  skillName: string,
+  files: Map<string, string>,
+  extraRules?: ScanRule[]
+): ScanResult {
   const findings: ScanFinding[] = [];
   let computedMaxSeverity: ScanSeverity | null = null;
   const urlSet = new Set<string>();
 
+  const rulesToApply = extraRules ? [...SCAN_RULES, ...extraRules] : SCAN_RULES;
+
   for (const [fileName, content] of files) {
     const lines = content.split('\n');
 
-    for (const rule of SCAN_RULES) {
+    for (const rule of rulesToApply) {
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i]!;
         const match = rule.pattern.exec(line);

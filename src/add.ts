@@ -56,11 +56,28 @@ import {
   extractSkillFiles,
   extractRemoteSkillFiles,
   extractWellKnownSkillFiles,
+  loadExternalRules,
+  type ScanRule,
 } from './scanner.ts';
 import { presentScanResults } from './scanner-ui.ts';
 import packageJson from '../package.json' with { type: 'json' };
 export function initTelemetry(version: string): void {
   setVersion(version);
+}
+
+/**
+ * Resolve external rules from the --rules option. Loads and caches the rules
+ * so they are parsed only once per unique rules path regardless of how many skills are scanned.
+ */
+const _externalRulesCache: Map<string, ScanRule[]> = new Map();
+function resolveExternalRules(options: AddOptions): ScanRule[] | undefined {
+  if (!options.rules) return undefined;
+  const key = options.rules;
+  const cached = _externalRulesCache.get(key);
+  if (cached) return cached;
+  const loaded = loadExternalRules(key);
+  _externalRulesCache.set(key, loaded);
+  return loaded;
 }
 
 /**
@@ -334,6 +351,7 @@ export interface AddOptions {
   fullDepth?: boolean;
   skipScan?: boolean;
   vtKey?: string;
+  rules?: string;
 }
 
 /**
@@ -551,7 +569,8 @@ async function handleRemoteSkill(
 
   if (!options.skipScan) {
     const files = extractRemoteSkillFiles(remoteSkill);
-    const scanResult = scanSkillContent(remoteSkill.installName, files);
+    const extraRules = resolveExternalRules(options);
+    const scanResult = scanSkillContent(remoteSkill.installName, files, extraRules);
     const vtKey = options.vtKey || process.env.VT_API_KEY;
     const skillContents = vtKey
       ? new Map([[remoteSkill.installName, remoteSkill.content]])
@@ -979,9 +998,10 @@ async function handleWellKnownSkills(
   if (!options.skipScan) {
     spinner.start('Scanning skills for security issues...');
     const scanResults = [];
+    const extraRules = resolveExternalRules(options);
     for (const skill of selectedSkills) {
       const files = extractWellKnownSkillFiles(skill);
-      scanResults.push(scanSkillContent(skill.installName, files));
+      scanResults.push(scanSkillContent(skill.installName, files, extraRules));
     }
     spinner.stop('Security scan complete');
     const vtKey = options.vtKey || process.env.VT_API_KEY;
@@ -1334,7 +1354,8 @@ async function handleDirectUrlSkillLegacy(
 
   if (!options.skipScan) {
     const files = extractRemoteSkillFiles(remoteSkill);
-    const scanResult = scanSkillContent(remoteSkill.installName, files);
+    const extraRules = resolveExternalRules(options);
+    const scanResult = scanSkillContent(remoteSkill.installName, files, extraRules);
     const vtKey = options.vtKey || process.env.VT_API_KEY;
     const skillContents = vtKey
       ? new Map([[remoteSkill.installName, remoteSkill.content]])
@@ -1818,10 +1839,11 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
       const scanResults = [];
       const vtKey = options.vtKey || process.env.VT_API_KEY;
       const skillContents = vtKey ? new Map<string, string>() : undefined;
+      const extraRules = resolveExternalRules(options);
       for (const skill of selectedSkills) {
         const files = await extractSkillFiles(skill);
         const displayName = getSkillDisplayName(skill);
-        scanResults.push(scanSkillContent(displayName, files));
+        scanResults.push(scanSkillContent(displayName, files, extraRules));
         if (skillContents) {
           const mainContent = files.get('SKILL.md');
           if (mainContent) {
@@ -2182,9 +2204,20 @@ export function parseAddOptions(args: string[]): { source: string[]; options: Ad
       options.fullDepth = true;
     } else if (arg === '--skip-scan') {
       options.skipScan = true;
+    } else if (arg === '--rules') {
+      i++;
+      const rulesValue = args[i];
+      if (!rulesValue || rulesValue.startsWith('-')) {
+        throw new Error('Missing value for --rules option');
+      }
+      options.rules = rulesValue;
     } else if (arg === '--vt-key') {
       i++;
-      options.vtKey = args[i];
+      const vtKeyValue = args[i];
+      if (!vtKeyValue || vtKeyValue.startsWith('-')) {
+        throw new Error('Missing value for --vt-key option');
+      }
+      options.vtKey = vtKeyValue;
     } else if (arg && !arg.startsWith('-')) {
       source.push(arg);
     }
