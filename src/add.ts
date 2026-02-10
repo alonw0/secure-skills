@@ -67,14 +67,17 @@ export function initTelemetry(version: string): void {
 
 /**
  * Resolve external rules from the --rules option. Loads and caches the rules
- * so they are parsed only once per invocation regardless of how many skills are scanned.
+ * so they are parsed only once per unique rules path regardless of how many skills are scanned.
  */
-let _cachedExternalRules: ScanRule[] | undefined;
+const _externalRulesCache: Map<string, ScanRule[]> = new Map();
 function resolveExternalRules(options: AddOptions): ScanRule[] | undefined {
   if (!options.rules) return undefined;
-  if (_cachedExternalRules) return _cachedExternalRules;
-  _cachedExternalRules = loadExternalRules(options.rules);
-  return _cachedExternalRules;
+  const key = options.rules;
+  const cached = _externalRulesCache.get(key);
+  if (cached) return cached;
+  const loaded = loadExternalRules(key);
+  _externalRulesCache.set(key, loaded);
+  return loaded;
 }
 
 /**
