@@ -6,10 +6,10 @@ The `--rules` flag lets you extend the built-in security scanner with your own c
 
 ```bash
 # Scan with additional rules from a file
-npx skills add owner/repo --rules ./my-rules.json
+npx skillsio add owner/repo --rules ./my-rules.json
 
 # Scan with all rule files in a directory
-npx skills add owner/repo --rules ./rules/
+npx skillsio add owner/repo --rules ./rules/
 ```
 
 ## Rules File Format
