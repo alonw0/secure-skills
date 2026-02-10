@@ -493,6 +493,10 @@ export function loadExternalRulesFromFile(filePath: string): ScanRule[] {
     throw new Error(`External rules file not found: ${absPath}`);
   }
 
+  const stats = statSync(absPath);
+  if (!stats.isFile()) {
+    throw new Error(`External rules path is not a regular file: ${absPath}`);
+  }
   const content = readFileSync(absPath, 'utf-8');
   let parsed: unknown;
 
