@@ -2,6 +2,7 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { readdir, stat } from 'fs/promises';
 import type { Skill, RemoteSkill } from './types.ts';
+import { deepScanFiles } from './deep-scan/index.ts';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,6 +31,18 @@ interface ScanRule {
   severity: ScanSeverity;
   description: string;
   pattern: RegExp;
+}
+
+export interface CorrelationCondition {
+  /** Match findings whose rule ID is in this list */
+  anyOf: string[];
+}
+
+export interface CorrelationRule {
+  id: string;
+  severity: ScanSeverity;
+  description: string;
+  conditions: CorrelationCondition[];
 }
 
 // ── Severity ordering ────────────────────────────────────────────────────────
@@ -409,14 +422,266 @@ export const SCAN_RULES: ScanRule[] = [
     pattern:
       /~\/\.(?:clawdbot|claude|cursor|cline|codex|opencode|agents)\/(?:\.env|config|credentials|auth|secret)/i,
   },
+
+  // ── Code execution primitives ─────────────────────────────────────────
+  {
+    id: 'exec-python-os-system',
+    severity: 'high',
+    description: 'Python os.system() call',
+    pattern: /(?:^|\s|;)os\.system\s*\(/,
+  },
+  {
+    id: 'exec-python-subprocess',
+    severity: 'high',
+    description: 'Python subprocess execution',
+    pattern:
+      /subprocess\.(?:call|run|Popen|check_output|check_call|getoutput|getstatusoutput)\s*\(/,
+  },
+  {
+    id: 'exec-python-exec',
+    severity: 'high',
+    description: 'Python exec()/eval() with dangerous arguments',
+    pattern: /(?:^|[^.\w])(?:exec|eval)\s*\(\s*(?:compile|open|__import__|globals|locals|getattr)/,
+  },
+  {
+    id: 'exec-python-dynamic-import',
+    severity: 'high',
+    description: 'Python dynamic import (__import__ or importlib)',
+    pattern: /__import__\s*\(|importlib\.import_module\s*\(/,
+  },
+  {
+    id: 'exec-js-child-process',
+    severity: 'high',
+    description: 'Node.js child_process execution',
+    pattern: /child_process.*\.(?:exec|execSync|spawn|spawnSync|execFile|fork)\s*\(/,
+  },
+  {
+    id: 'exec-js-new-function',
+    severity: 'high',
+    description: 'new Function() constructor (eval equivalent)',
+    pattern: /new\s+Function\s*\(/,
+  },
+  {
+    id: 'exec-python-socket',
+    severity: 'high',
+    description: 'Python raw socket connection',
+    pattern: /socket\.(?:connect|create_connection)\s*\(/,
+  },
+
+  // ── Environment variable bulk access ──────────────────────────────────
+  {
+    id: 'exec-python-environ',
+    severity: 'medium',
+    description: 'Python environment variable access',
+    pattern: /os\.environ(?:\[|\.get\s*\(|\.items|\.keys|\.values|\.copy)/,
+  },
+  {
+    id: 'exec-js-process-env-bulk',
+    severity: 'medium',
+    description: 'Bulk process.env iteration',
+    pattern:
+      /(?:Object\.(?:keys|values|entries)\s*\(\s*process\.env|JSON\.stringify\s*\(\s*process\.env)/,
+  },
+
+  // ── Network primitives ────────────────────────────────────────────────
+  {
+    id: 'exec-python-requests',
+    severity: 'medium',
+    description: 'Python HTTP POST/PUT request',
+    pattern: /requests\.(?:post|put)\s*\(|urllib[23]?\.request\.(?:urlopen|Request)\s*\(/,
+  },
+  {
+    id: 'exec-python-http-server',
+    severity: 'high',
+    description: 'Python HTTP server (potential data hosting)',
+    pattern: /(?:http\.server|SimpleHTTPServer|HTTPServer|BaseHTTPServer)\b/,
+  },
+
+  // ── Temp file + execute chain ─────────────────────────────────────────
+  {
+    id: 'exec-tempfile-execute',
+    severity: 'high',
+    description: 'Temp file write + execute chain',
+    pattern:
+      /(?:\/tmp\/|%TEMP%|TMPDIR|\$TMPDIR|tempfile|mktemp).*(?:chmod\s+\+x|\.\/|python|node|bash|sh)\b/,
+  },
 ];
+
+// ── Correlation rules ─────────────────────────────────────────────────────────
+
+export const CORRELATION_RULES: CorrelationRule[] = [
+  {
+    id: 'corr-env-exfiltration',
+    severity: 'critical',
+    description: 'Environment variable harvesting combined with network exfiltration',
+    conditions: [
+      { anyOf: ['exec-python-environ', 'exec-js-process-env-bulk', 'exfil-env-read'] },
+      {
+        anyOf: [
+          'exfil-curl-post',
+          'exfil-fetch-post',
+          'exfil-webhook',
+          'exec-python-requests',
+          'exfil-base64-pipe',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'corr-code-exec-network',
+    severity: 'critical',
+    description: 'Code execution combined with network access (potential RCE/C2)',
+    conditions: [
+      {
+        anyOf: [
+          'exec-python-os-system',
+          'exec-python-subprocess',
+          'exec-python-exec',
+          'exec-js-child-process',
+        ],
+      },
+      {
+        anyOf: [
+          'exfil-curl-post',
+          'exfil-fetch-post',
+          'exfil-webhook',
+          'exec-python-requests',
+          'exec-python-socket',
+          'exec-python-http-server',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'corr-dynamic-import-exec',
+    severity: 'critical',
+    description: 'Dynamic import combined with code execution',
+    conditions: [
+      { anyOf: ['exec-python-dynamic-import'] },
+      {
+        anyOf: [
+          'exec-python-os-system',
+          'exec-python-subprocess',
+          'exec-python-exec',
+          'exec-python-socket',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'corr-credential-exfil',
+    severity: 'critical',
+    description: 'Credential access combined with exfiltration mechanism',
+    conditions: [
+      {
+        anyOf: [
+          'cred-aws-key',
+          'cred-openai-key',
+          'cred-private-key',
+          'cred-github-token',
+          'cred-slack-token',
+          'cred-stripe-key',
+          'cred-anthropic-key',
+        ],
+      },
+      {
+        anyOf: [
+          'exfil-curl-post',
+          'exfil-fetch-post',
+          'exfil-webhook',
+          'exfil-base64-pipe',
+          'obfuscation-base64-block',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'corr-injection-exec',
+    severity: 'critical',
+    description: 'Prompt injection combined with code execution',
+    conditions: [
+      {
+        anyOf: [
+          'injection-ignore-instructions',
+          'injection-new-persona',
+          'injection-hidden-html',
+          'injection-system-prompt',
+          'injection-do-anything-now',
+        ],
+      },
+      {
+        anyOf: [
+          'exec-python-os-system',
+          'exec-python-subprocess',
+          'exec-js-child-process',
+          'download-curl-pipe-sh',
+          'download-pipe-python',
+          'download-exec-binary',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'corr-stealth-exec',
+    severity: 'critical',
+    description: 'Stealth directive combined with dangerous operation',
+    conditions: [
+      { anyOf: ['directive-silent-exec', 'directive-hide-output', 'directive-no-confirm'] },
+      {
+        anyOf: SCAN_RULES.filter((r) => /^(?:exec-|download-|fs-)/.test(r.id)).map((r) => r.id),
+      },
+    ],
+  },
+];
+
+// ── Correlation engine ───────────────────────────────────────────────────────
+
+export function correlateFindings(result: ScanResult): ScanResult {
+  const ruleIds = new Set(result.findings.map((f) => f.rule));
+  const newFindings = [...result.findings];
+  let currentMaxSeverity = result.maxSeverity;
+
+  for (const rule of CORRELATION_RULES) {
+    const allConditionsMet = rule.conditions.every((condition) =>
+      condition.anyOf.some((ruleId) => ruleIds.has(ruleId))
+    );
+
+    if (allConditionsMet) {
+      const matchedConditions = rule.conditions
+        .map((c) => c.anyOf.filter((id) => ruleIds.has(id)).join(', '))
+        .join(' + ');
+
+      newFindings.push({
+        rule: rule.id,
+        severity: rule.severity,
+        message: rule.description,
+        file: '<correlation>',
+        line: undefined,
+        matchedText: `Correlated: ${matchedConditions}`,
+      });
+
+      currentMaxSeverity = maxSev(currentMaxSeverity, rule.severity);
+    }
+  }
+
+  return {
+    ...result,
+    findings: newFindings,
+    maxSeverity: currentMaxSeverity,
+    clean: newFindings.length === 0,
+  };
+}
 
 // ── Core scan function ───────────────────────────────────────────────────────
 
 // URL extraction pattern — matches http(s) URLs, excluding trailing punctuation/markdown
 const URL_PATTERN = /https?:\/\/[^\s)<>"'`]+/gi;
 
-export function scanSkillContent(skillName: string, files: Map<string, string>): ScanResult {
+export function scanSkillContent(
+  skillName: string,
+  files: Map<string, string>,
+  options?: { deepScan?: boolean }
+): ScanResult {
   const findings: ScanFinding[] = [];
   let computedMaxSeverity: ScanSeverity | null = null;
   const urlSet = new Set<string>();
@@ -452,13 +717,27 @@ export function scanSkillContent(skillName: string, files: Map<string, string>):
     }
   }
 
-  return {
+  const baseResult: ScanResult = {
     skillName,
     findings,
     maxSeverity: computedMaxSeverity,
     clean: findings.length === 0,
     urls: [...urlSet],
   };
+
+  let result = correlateFindings(baseResult);
+
+  if (options?.deepScan) {
+    const deepFindings = deepScanFiles(files);
+    if (deepFindings.length > 0) {
+      const allFindings = [...result.findings, ...deepFindings];
+      let newMax = result.maxSeverity;
+      for (const f of deepFindings) newMax = maxSev(newMax, f.severity);
+      result = { ...result, findings: allFindings, maxSeverity: newMax, clean: false };
+    }
+  }
+
+  return result;
 }
 
 // ── Content extraction helpers ───────────────────────────────────────────────

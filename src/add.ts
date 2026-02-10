@@ -333,6 +333,7 @@ export interface AddOptions {
   all?: boolean;
   fullDepth?: boolean;
   skipScan?: boolean;
+  deepScan?: boolean;
   vtKey?: string;
 }
 
@@ -551,7 +552,9 @@ async function handleRemoteSkill(
 
   if (!options.skipScan) {
     const files = extractRemoteSkillFiles(remoteSkill);
-    const scanResult = scanSkillContent(remoteSkill.installName, files);
+    const scanResult = scanSkillContent(remoteSkill.installName, files, {
+      deepScan: options.deepScan,
+    });
     const vtKey = options.vtKey || process.env.VT_API_KEY;
     const skillContents = vtKey
       ? new Map([[remoteSkill.installName, remoteSkill.content]])
@@ -981,7 +984,11 @@ async function handleWellKnownSkills(
     const scanResults = [];
     for (const skill of selectedSkills) {
       const files = extractWellKnownSkillFiles(skill);
-      scanResults.push(scanSkillContent(skill.installName, files));
+      scanResults.push(
+        scanSkillContent(skill.installName, files, {
+          deepScan: options.deepScan,
+        })
+      );
     }
     spinner.stop('Security scan complete');
     const vtKey = options.vtKey || process.env.VT_API_KEY;
@@ -1334,7 +1341,9 @@ async function handleDirectUrlSkillLegacy(
 
   if (!options.skipScan) {
     const files = extractRemoteSkillFiles(remoteSkill);
-    const scanResult = scanSkillContent(remoteSkill.installName, files);
+    const scanResult = scanSkillContent(remoteSkill.installName, files, {
+      deepScan: options.deepScan,
+    });
     const vtKey = options.vtKey || process.env.VT_API_KEY;
     const skillContents = vtKey
       ? new Map([[remoteSkill.installName, remoteSkill.content]])
@@ -1821,7 +1830,11 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
       for (const skill of selectedSkills) {
         const files = await extractSkillFiles(skill);
         const displayName = getSkillDisplayName(skill);
-        scanResults.push(scanSkillContent(displayName, files));
+        scanResults.push(
+          scanSkillContent(displayName, files, {
+            deepScan: options.deepScan,
+          })
+        );
         if (skillContents) {
           const mainContent = files.get('SKILL.md');
           if (mainContent) {
@@ -2182,6 +2195,8 @@ export function parseAddOptions(args: string[]): { source: string[]; options: Ad
       options.fullDepth = true;
     } else if (arg === '--skip-scan') {
       options.skipScan = true;
+    } else if (arg === '--deep-scan') {
+      options.deepScan = true;
     } else if (arg === '--vt-key') {
       i++;
       options.vtKey = args[i];

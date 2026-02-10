@@ -117,6 +117,7 @@ ${BOLD}Add Options:${RESET}
   --all                  Shorthand for --skill '*' --agent '*' -y
   --full-depth           Search all subdirectories even when a root SKILL.md exists
   --skip-scan            Skip security scan before installation
+  --deep-scan            Run deep taint analysis on Python/JS/TS files
   --vt-key <key>         VirusTotal API key for additional threat intelligence
 
 ${BOLD}Remove Options:${RESET}
