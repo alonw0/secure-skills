@@ -118,6 +118,7 @@ ${BOLD}Add Options:${RESET}
   --full-depth           Search all subdirectories even when a root SKILL.md exists
   --skip-scan            Skip security scan before installation
   --rules <path>         Load additional scan rules from a JSON file or directory
+  --deep-scan            Run deep taint analysis on Python/JS/TS files
   --vt-key <key>         VirusTotal API key for additional threat intelligence
 
 ${BOLD}Remove Options:${RESET}
