@@ -2206,10 +2206,18 @@ export function parseAddOptions(args: string[]): { source: string[]; options: Ad
       options.skipScan = true;
     } else if (arg === '--rules') {
       i++;
-      options.rules = args[i];
+      const rulesValue = args[i];
+      if (!rulesValue || rulesValue.startsWith('-')) {
+        throw new Error('Missing value for --rules option');
+      }
+      options.rules = rulesValue;
     } else if (arg === '--vt-key') {
       i++;
-      options.vtKey = args[i];
+      const vtKeyValue = args[i];
+      if (!vtKeyValue || vtKeyValue.startsWith('-')) {
+        throw new Error('Missing value for --vt-key option');
+      }
+      options.vtKey = vtKeyValue;
     } else if (arg && !arg.startsWith('-')) {
       source.push(arg);
     }
