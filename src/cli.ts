@@ -6,11 +6,11 @@ import { basename, join, dirname } from 'path';
 import { homedir } from 'os';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
-import { runAdd, parseAddOptions, initTelemetry } from './add.ts';
+import { runAdd, parseAddOptions } from './add.ts';
 import { runFind } from './find.ts';
 import { runList } from './list.ts';
 import { removeCommand, parseRemoveOptions } from './remove.ts';
-import { track } from './telemetry.ts';
+
 import { fetchSkillFolderHash, getGitHubToken } from './skill-lock.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -26,7 +26,6 @@ function getVersion(): string {
 }
 
 const VERSION = getVersion();
-initTelemetry(VERSION);
 
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
@@ -423,13 +422,6 @@ async function runCheck(args: string[] = []): Promise<void> {
     console.log(`${DIM}Could not check ${errors.length} skill(s) (may need reinstall)${RESET}`);
   }
 
-  // Track telemetry
-  track({
-    event: 'check',
-    skillCount: String(totalSkills),
-    updatesAvailable: String(updates.length),
-  });
-
   console.log();
 }
 
@@ -538,14 +530,6 @@ async function runUpdate(): Promise<void> {
   if (failCount > 0) {
     console.log(`${DIM}Failed to update ${failCount} skill(s)${RESET}`);
   }
-
-  // Track telemetry
-  track({
-    event: 'update',
-    skillCount: String(updates.length),
-    successCount: String(successCount),
-    failCount: String(failCount),
-  });
 
   console.log();
 }

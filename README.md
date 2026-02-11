@@ -14,7 +14,7 @@ security gate so you can still move fast without running untrusted code.
 
 ## What It Does
 
-Every `skillsio add` command runs a local security scan **before** anything is installed. The scanner applies ~52 regex
+Every `skillsio add` command runs a local security scan **before** anything is installed. The scanner applies ~81 regex
 rules and a correlation engine derived from the Snyk and ClawHavoc research, organized into 8 threat categories:
 
 | Category | What it catches |
@@ -120,7 +120,7 @@ npx skillsio add owner/repo --rules ./my-rules.json
 npx skillsio add owner/repo --rules ./rules/
 ```
 
-External rules are applied **in addition to** the built-in ~52 rules — they never replace them. Findings from external
+External rules are applied **in addition to** the built-in ~81 rules — they never replace them. Findings from external
 rules follow the same severity-based prompt flow as built-in findings.
 
 See [docs/EXTERNAL-RULES.md](docs/EXTERNAL-RULES.md) for the full format reference, more examples, and tips for writing
@@ -289,8 +289,6 @@ The CLI automatically detects which coding agents you have installed.
 | --- | --- |
 | `VT_API_KEY` | VirusTotal API key for optional threat intelligence during security scans |
 | `INSTALL_INTERNAL_SKILLS` | Set to `1` to show and install skills marked as `internal: true` |
-| `DISABLE_TELEMETRY` | Disable anonymous usage telemetry |
-| `DO_NOT_TRACK` | Alternative way to disable telemetry |
 
 ## Development
 
@@ -305,7 +303,7 @@ pnpm format           # Format code with Prettier
 
 ### Scanner Architecture
 
-- `src/scanner.ts` — Rules engine. Defines ~52 regex rules across 8 threat categories, a correlation engine for
+- `src/scanner.ts` — Rules engine. Defines ~81 regex rules across 8 threat categories, a correlation engine for
   multi-signal detection, and optional deep taint analysis integration. Supports loading external rules from JSON
   files via `--rules`.
 - `src/scanner-ui.ts` — Presentation layer. Displays findings by severity, runs optional VT lookups, handles
@@ -319,6 +317,13 @@ pnpm format           # Format code with Prettier
   well-known endpoints, legacy Mintlify).
 
 ## Changelog
+
+### 1.1.1
+
+- Removed anonymous usage telemetry inherited from the original Vercel `skills` CLI
+- The upstream tool sent events to `https://add-skill.vercel.sh/t` on every command (install, remove, find, check, update) — this has been completely stripped out
+- Removed `DISABLE_TELEMETRY` and `DO_NOT_TRACK` environment variables (no longer needed)
+- Added 12 more regex rules to the scanner
 
 ### 1.1.0
 
@@ -341,6 +346,14 @@ pnpm format           # Format code with Prettier
 - VirusTotal integration for optional secondary threat intelligence
 - URL transparency: all external URLs in skill files are shown before installation
 - Scanner rules informed by Snyk and ClawHavoc research
+
+## Research
+
+The scanner rules are informed by the following research into malicious agent skills:
+
+- **Snyk (2025)** — [Analysis of 3,984 published agent skills](https://snyk.io/blog/), finding 76 confirmed malicious skills (13.4% of clawhub.ai had critical issues). Identified core attack taxonomy: data exfiltration, prompt injection, credential theft, and obfuscated payloads.
+- **Koi Security (2025)** — [ClawHavoc: 341 Malicious ClawedBot Skills](https://www.koi.ai/blog/clawhavoc-341-malicious-clawedbot-skills-found-by-the-bot-they-were-targeting). Documented AMOS stealer droppers, password-protected archives, base64 payloads, macOS quarantine bypasses, and reverse shells in the wild.
+- **arxiv 2602.06547v1 (2025)** — [Malicious Agent Skills at Scale](https://arxiv.org/abs/2602.06547v1). Large-scale analysis identifying attack taxonomies (E1-E3 exfiltration, P1-P4 prompt injection, SC1-SC3 supply chain, PE2-PE3 privilege escalation), MCP server abuse, agent hook interception, permission bypass flags, environment-gated sleeper patterns, invisible Unicode instruction smuggling, and the "industrial actor fingerprint" (credential access + remote execution, 97.6% sensitivity).
 
 ## Acknowledgments
 

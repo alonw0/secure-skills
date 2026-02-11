@@ -1,6 +1,6 @@
 import * as readline from 'readline';
 import { runAdd, parseAddOptions } from './add.ts';
-import { track } from './telemetry.ts';
+
 import { isRepoPrivate, parseOwnerRepo } from './source-parser.ts';
 
 const RESET = '\x1b[0m';
@@ -266,13 +266,6 @@ ${DIM}  2) npx skills add <owner/repo@skill>${RESET}`;
   if (query) {
     const results = await searchSkillsAPI(query);
 
-    // Track telemetry for non-interactive search
-    track({
-      event: 'find',
-      query,
-      resultCount: String(results.length),
-    });
-
     if (results.length === 0) {
       console.log(`${DIM}No skills found for "${query}"${RESET}`);
       return;
@@ -296,14 +289,6 @@ ${DIM}  2) npx skills add <owner/repo@skill>${RESET}`;
     console.log();
   }
   const selected = await runSearchPrompt();
-
-  // Track telemetry for interactive search
-  track({
-    event: 'find',
-    query: '',
-    resultCount: selected ? '1' : '0',
-    interactive: '1',
-  });
 
   if (!selected) {
     console.log(`${DIM}Search cancelled${RESET}`);

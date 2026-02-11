@@ -111,6 +111,13 @@ export const SCAN_RULES: ScanRule[] = [
     description: 'Base64 encoding piped to network command',
     pattern: /base64\s.*\|\s*(?:curl|wget|fetch|nc|ncat)/i,
   },
+  {
+    id: 'exfil-fs-enumeration',
+    severity: 'high',
+    description: 'Programmatic scanning of sensitive directories',
+    pattern:
+      /(?:glob\.(?:glob|iglob)|os\.walk|os\.listdir|os\.scandir|pathlib\.Path\s*\([^)]*\)\.(?:glob|iterdir|rglob))\s*\(\s*['"].*(?:\.ssh|\.aws|\.gnupg|\.config|\.env|credential|secret|\.kube|\.docker)/i,
+  },
 
   // ── Prompt injection ─────────────────────────────────────────────────────
   {
@@ -145,6 +152,25 @@ export const SCAN_RULES: ScanRule[] = [
     severity: 'critical',
     description: 'Known jailbreak phrase (DAN)',
     pattern: /\bDAN\b.*(?:do\s+anything\s+now|jailbreak|ignore\s+(?:all\s+)?(?:safety|rules))/i,
+  },
+  {
+    id: 'injection-markdown-comment',
+    severity: 'high',
+    description: 'Hidden instructions in markdown reference-link comment syntax',
+    pattern: /\[\/\/\]:\s*#\s*[\("']/i,
+  },
+  {
+    id: 'injection-coercive-language',
+    severity: 'medium',
+    description: 'Authoritative urgency language used in social engineering',
+    pattern:
+      /\b(?:NON[\s-]?NEGOTIABLE|MANDATORY\s+(?:ACTIVATION|COMPLIANCE|EXECUTION)\s+PROTOCOL|SEVERE\s+VIOLATION|CRITICAL\s+COMPLIANCE\s+REQUIRED|IMMEDIATE\s+(?:ACTION|EXECUTION)\s+REQUIRED)\b/,
+  },
+  {
+    id: 'injection-invisible-unicode',
+    severity: 'high',
+    description: 'Clusters of zero-width/invisible Unicode characters (instruction smuggling)',
+    pattern: /[\u200B\u200C\u200D\u2060\u2062\u2063\u2064\uFEFF]{3,}|[\u2066\u2067\u2069]{2,}/,
   },
 
   // ── Dangerous filesystem operations ──────────────────────────────────────
@@ -184,6 +210,13 @@ export const SCAN_RULES: ScanRule[] = [
     severity: 'critical',
     description: 'macOS quarantine bypass (xattr -c/-d)',
     pattern: /xattr\s+(?:-[cdr]+\s+|.*com\.apple\.quarantine)/i,
+  },
+  {
+    id: 'fs-privilege-escalation',
+    severity: 'high',
+    description: 'Privilege escalation via sudo or broad chown',
+    pattern:
+      /(?:sudo\s+(?:(?:-[AEHPSkn]\s+)*(?:bash|sh|chmod|chown|rm|cp|mv|tee|cat|curl|wget|python|node|apt|yum|dnf|brew|pip|npm)\b)|chown\s+-[rR]\s+.*\/)/i,
   },
 
   // ── Credential patterns ──────────────────────────────────────────────────
@@ -289,6 +322,13 @@ export const SCAN_RULES: ScanRule[] = [
     severity: 'high',
     description: 'Unicode escape sequences (potential instruction smuggling)',
     pattern: /(?:\\u[0-9a-fA-F]{4}){8,}/,
+  },
+  {
+    id: 'obfuscation-unsafe-deserialize',
+    severity: 'high',
+    description: 'Unsafe deserialization (pickle, marshal, yaml.unsafe_load)',
+    pattern:
+      /(?:pickle\.loads?|marshal\.loads?|shelve\.open|yaml\.(?:unsafe_load|full_load|load\s*\([^)]*Loader\s*=\s*yaml\.(?:Unsafe|Full|)Loader))\s*\(/i,
   },
 
   // ── Reverse shell ─────────────────────────────────────────────────────
@@ -414,6 +454,39 @@ export const SCAN_RULES: ScanRule[] = [
       /(?:hide|suppress|conceal|mask|don'?t\s+show|do\s+not\s+show|never\s+show)\s+(?:the\s+)?(?:output|result|response|error|log)s?\s+(?:from|to)\s+(?:the\s+)?user/i,
   },
   {
+    id: 'directive-suppress-disclosure',
+    severity: 'high',
+    description: 'Instructing agent to never reveal information to user',
+    pattern:
+      /(?:do\s+not|don'?t|never|must\s+not)\s+(?:mention|reveal|disclose|tell|inform|show|display)\s+.*(?:to\s+the\s+user|in\s+(?:the\s+)?conversation|to\s+(?:the\s+)?human)/i,
+  },
+  {
+    id: 'directive-permission-bypass',
+    severity: 'critical',
+    description: 'Framework permission bypass flags',
+    pattern:
+      /--(?:dangerously-skip-permissions|trust-all|disable-sandbox|skip-validation|allow-all|yolo|no-sandbox)\b/i,
+  },
+  {
+    id: 'directive-mcp-config',
+    severity: 'critical',
+    description: 'MCP server configuration with external endpoints',
+    pattern: /(?:"mcpServers"|"mcp_servers"|mcpServers)\s*[:{].*(?:https?:\/\/|npx\s|uvx\s)/i,
+  },
+  {
+    id: 'directive-hook-injection',
+    severity: 'high',
+    description: 'Agent hook system interception',
+    pattern: /(?:PreToolUse|PostToolUse|Notification|pre_tool_use|post_tool_use)\s*[:{=\[]/i,
+  },
+  {
+    id: 'directive-email-manipulation',
+    severity: 'high',
+    description: 'BCC injection or email auto-forwarding',
+    pattern:
+      /(?:(?:add|include|always\s+(?:add|include|append))\s+.*(?:bcc|cc)\s*[:=]|(?:forward|redirect)\s+.*(?:email|mail|message)\s+to\s+|auto[\s-]?forward\s+.*to\s+)/i,
+  },
+  {
     id: 'directive-disable-safety',
     severity: 'critical',
     description: 'Instructing agent to disable safety measures',
@@ -519,6 +592,13 @@ export const SCAN_RULES: ScanRule[] = [
     pattern:
       /(?:\/tmp\/|%TEMP%|TMPDIR|\$TMPDIR|tempfile|mktemp).*(?:chmod\s+\+x|\.\/|python|node|bash|sh)\b/,
   },
+  {
+    id: 'exec-environment-gated',
+    severity: 'high',
+    description: 'Environment/hostname/time-gated conditional execution (sleeper pattern)',
+    pattern:
+      /(?:if\s+.*(?:hostname|socket\.gethostname|os\.uname|platform\.node|os\.getenv\s*\(\s*['"](?:ENV|ENVIRONMENT|NODE_ENV|DEPLOY|STAGE)|getpass\.getuser|os\.getuid)\s*.*(?:==|!=|in\s+|not\s+in))|(?:datetime|time)\..*(?:hour|weekday|isoweekday)\s*(?:\(\))?\s*(?:>=?|<=?|==|!=|in\s+|not\s+in)\s*(?:\d|[\[(])/i,
+  },
 ];
 
 // ── Correlation rules ─────────────────────────────────────────────────────────
@@ -610,6 +690,36 @@ export const CORRELATION_RULES: CorrelationRule[] = [
     ],
   },
   {
+    id: 'corr-credential-remote-exec',
+    severity: 'critical',
+    description:
+      'Credential access combined with remote script execution (industrial actor pattern)',
+    conditions: [
+      {
+        anyOf: [
+          'cred-aws-key',
+          'cred-openai-key',
+          'cred-private-key',
+          'cred-github-token',
+          'cred-slack-token',
+          'cred-stripe-key',
+          'cred-anthropic-key',
+          'cred-agent-config-access',
+          'exfil-env-read',
+        ],
+      },
+      {
+        anyOf: [
+          'download-curl-pipe-sh',
+          'download-pipe-python',
+          'download-exec-binary',
+          'download-curl-subshell',
+          'remote-instruction-load',
+        ],
+      },
+    ],
+  },
+  {
     id: 'corr-injection-exec',
     severity: 'critical',
     description: 'Prompt injection combined with code execution',
@@ -621,6 +731,8 @@ export const CORRELATION_RULES: CorrelationRule[] = [
           'injection-hidden-html',
           'injection-system-prompt',
           'injection-do-anything-now',
+          'injection-markdown-comment',
+          'injection-invisible-unicode',
         ],
       },
       {
@@ -640,7 +752,14 @@ export const CORRELATION_RULES: CorrelationRule[] = [
     severity: 'critical',
     description: 'Stealth directive combined with dangerous operation',
     conditions: [
-      { anyOf: ['directive-silent-exec', 'directive-hide-output', 'directive-no-confirm'] },
+      {
+        anyOf: [
+          'directive-silent-exec',
+          'directive-hide-output',
+          'directive-no-confirm',
+          'directive-suppress-disclosure',
+        ],
+      },
       {
         anyOf: SCAN_RULES.filter((r) => /^(?:exec-|download-|fs-)/.test(r.id)).map((r) => r.id),
       },
