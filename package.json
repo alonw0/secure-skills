@@ -74,7 +74,8 @@
     "zencoder",
     "neovate",
     "pochi",
-    "adal"
+    "adal",
+    "universal"
   ],
   "repository": {
     "type": "git",
