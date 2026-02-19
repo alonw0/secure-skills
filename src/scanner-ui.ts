@@ -2,6 +2,7 @@ import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import type { ScanResult, ScanSeverity } from './scanner.ts';
 import { checkSkillOnVT, type VTVerdict } from './vt.ts';
+import { checkSkillOnSkillsSh, type SkillsShResult, type SkillsShSource } from './skills-sh.ts';
 
 const SEVERITY_LABELS: Record<ScanSeverity, string> = {
   critical: pc.bgRed(pc.white(pc.bold(' CRITICAL '))),
@@ -52,11 +53,29 @@ function displayVTVerdict(verdict: VTVerdict): void {
   }
 }
 
+function displaySkillsShResult(result: SkillsShResult): void {
+  if (!result.found || result.audits.length === 0) return;
+
+  const badges = result.audits
+    .map((a) => {
+      const name = a.auditor === 'agent-trust-hub' ? 'Trust Hub' : a.displayName;
+      if (a.status === 'pass') return `[${pc.green(`${name} ✓`)}]`;
+      if (a.status === 'fail') return `[${pc.red(`${name} ✗`)}]`;
+      return `[${pc.dim(`${name} ~`)}]`;
+    })
+    .join('  ');
+
+  p.log.message(`  ${pc.cyan('◆')} skills.sh: ${result.audits.length} audits  ${badges}`);
+  p.log.message(pc.dim(`    ${result.permalink}`));
+}
+
 export interface PresentScanOptions {
   yes?: boolean;
   vtKey?: string;
   /** Map of skill name → primary content (SKILL.md) for VT hash lookup */
   skillContents?: Map<string, string>;
+  /** Map of skill name → GitHub source for skills.sh audit lookup */
+  skillsShSources?: Map<string, SkillsShSource>;
 }
 
 /**
@@ -74,25 +93,46 @@ export async function presentScanResults(
   // Collect all URLs across results
   const allUrls = [...new Set(results.flatMap((r) => r.urls))];
 
-  // Run VT lookups if key and content are provided
+  // Run VT and skills.sh lookups in parallel
   const vtVerdicts = new Map<string, VTVerdict>();
+  const skillsShResults = new Map<string, SkillsShResult>();
   let vtEscalate = false;
+  let skillsShEscalate = false;
 
-  if (options.vtKey && options.skillContents) {
-    for (const [skillName, content] of options.skillContents) {
-      try {
-        const verdict = await checkSkillOnVT(content, options.vtKey);
-        vtVerdicts.set(skillName, verdict);
-        if (verdict.found && verdict.verdict === 'malicious') {
-          vtEscalate = true;
+  await Promise.all([
+    // VT lookups
+    (async () => {
+      if (options.vtKey && options.skillContents) {
+        for (const [skillName, content] of options.skillContents) {
+          try {
+            const verdict = await checkSkillOnVT(content, options.vtKey);
+            vtVerdicts.set(skillName, verdict);
+            if (verdict.found && verdict.verdict === 'malicious') {
+              vtEscalate = true;
+            }
+          } catch {
+            // VT lookup failed — continue without it
+          }
         }
-      } catch {
-        // VT lookup failed — continue without it
       }
-    }
-  }
+    })(),
+    // skills.sh lookups
+    (async () => {
+      if (options.skillsShSources) {
+        await Promise.all(
+          [...options.skillsShSources.entries()].map(async ([skillName, source]) => {
+            const result = await checkSkillOnSkillsSh(source);
+            skillsShResults.set(skillName, result);
+            if (result.anyFail) {
+              skillsShEscalate = true;
+            }
+          })
+        );
+      }
+    })(),
+  ]);
 
-  if (allFindings.length === 0 && !vtEscalate) {
+  if (allFindings.length === 0 && !vtEscalate && !skillsShEscalate) {
     p.log.success(pc.green('Security scan passed — no issues found'));
 
     // Show VT results even when local scan is clean
@@ -100,6 +140,11 @@ export async function presentScanResults(
       for (const [, verdict] of vtVerdicts) {
         displayVTVerdict(verdict);
       }
+    }
+
+    // Show skills.sh results even when local scan is clean
+    for (const [, result] of skillsShResults) {
+      displaySkillsShResult(result);
     }
 
     // If URLs found in an otherwise clean skill, show them and prompt
@@ -151,6 +196,14 @@ export async function presentScanResults(
     }
   }
 
+  // Show skills.sh audit results
+  if (skillsShResults.size > 0) {
+    console.log();
+    for (const [, result] of skillsShResults) {
+      displaySkillsShResult(result);
+    }
+  }
+
   // Show URLs found in skill files
   if (allUrls.length > 0) {
     console.log();
@@ -165,6 +218,11 @@ export async function presentScanResults(
   // If VT says malicious, escalate to critical regardless of local findings
   if (vtEscalate) {
     overallMax = 'critical';
+  }
+
+  // If skills.sh auditors flagged failures, escalate to at least high
+  if (skillsShEscalate && SEVERITY_ORDER[overallMax] < SEVERITY_ORDER['high']) {
+    overallMax = 'high';
   }
 
   // Decide based on severity

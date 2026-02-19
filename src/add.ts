@@ -3,7 +3,8 @@ import pc from 'picocolors';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { sep } from 'path';
-import { parseSource, getOwnerRepo } from './source-parser.ts';
+import { parseSource, getOwnerRepo, parseOwnerRepo } from './source-parser.ts';
+import type { SkillsShSource } from './skills-sh.ts';
 import { searchMultiselect, cancelSymbol } from './prompts/search-multiselect.ts';
 
 // Helper to check if a value is a cancel symbol (works with both clack and our custom prompts)
@@ -62,6 +63,37 @@ function resolveExternalRules(options: AddOptions): ScanRule[] | undefined {
   const loaded = loadExternalRules(key);
   _externalRulesCache.set(key, loaded);
   return loaded;
+}
+
+/**
+ * Build a skills.sh source map for a single remote skill fetched via a provider.
+ * Returns a map with one entry when the sourceUrl is a github.com URL, otherwise undefined.
+ * The skill folder is derived from the last meaningful path segment of sourceUrl,
+ * falling back to the install name.
+ */
+function buildSkillsShSourcesForRemote(
+  remoteSkill: RemoteSkill,
+  _url: string
+): Map<string, SkillsShSource> | undefined {
+  const sourceUrl = remoteSkill.sourceUrl;
+  if (!sourceUrl || !sourceUrl.includes('github.com')) return undefined;
+
+  try {
+    const parsed = new URL(sourceUrl);
+    const path = parsed.pathname.slice(1).replace(/\.git$/, '');
+    const parts = path.split('/').filter(Boolean);
+    const ownerRepo = parseOwnerRepo(parts.slice(0, 2).join('/'));
+    if (!ownerRepo) return undefined;
+
+    // Use the last meaningful path segment if there's a subpath, otherwise installName
+    const skillFolder = parts.length > 2 ? parts.at(-1)! : remoteSkill.installName;
+
+    const sources = new Map<string, SkillsShSource>();
+    sources.set(remoteSkill.installName, { ...ownerRepo, skillFolder });
+    return sources;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -560,7 +592,15 @@ async function handleRemoteSkill(
     const skillContents = vtKey
       ? new Map([[remoteSkill.installName, remoteSkill.content]])
       : undefined;
-    if (!(await presentScanResults([scanResult], { yes: options.yes, vtKey, skillContents }))) {
+    const skillsShSources = buildSkillsShSourcesForRemote(remoteSkill, url);
+    if (
+      !(await presentScanResults([scanResult], {
+        yes: options.yes,
+        vtKey,
+        skillContents,
+        skillsShSources,
+      }))
+    ) {
       p.cancel('Installation cancelled due to security concerns');
       process.exit(0);
     }
@@ -1799,7 +1839,29 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
         }
       }
       spinner.stop('Security scan complete');
-      if (!(await presentScanResults(scanResults, { yes: options.yes, vtKey, skillContents }))) {
+
+      // Build skills.sh sources for GitHub-sourced skills
+      const skillsShSources = new Map<string, SkillsShSource>();
+      if (parsed.type === 'github') {
+        const ownerRepoStr = getOwnerRepo(parsed);
+        const ownerRepo = ownerRepoStr ? parseOwnerRepo(ownerRepoStr) : null;
+        if (ownerRepo) {
+          for (const skill of selectedSkills) {
+            const displayName = getSkillDisplayName(skill);
+            const skillFolder = skill.path.split('/').at(-1) ?? skill.name;
+            skillsShSources.set(displayName, { ...ownerRepo, skillFolder });
+          }
+        }
+      }
+
+      if (
+        !(await presentScanResults(scanResults, {
+          yes: options.yes,
+          vtKey,
+          skillContents,
+          skillsShSources: skillsShSources.size > 0 ? skillsShSources : undefined,
+        }))
+      ) {
         p.cancel('Installation cancelled due to security concerns');
         await cleanup(tempDir);
         process.exit(0);

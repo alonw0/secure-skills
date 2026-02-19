@@ -50,6 +50,23 @@ domain patterns that regex rules can't — letting you eyeball where a skill wan
 With `--yes`, URL-only prompts are auto-continued. Skills with high/critical findings always show URLs alongside the
 findings summary.
 
+### Third-Party Audits via skills.sh
+
+For GitHub-sourced skills, the CLI automatically checks [skills.sh](https://skills.sh) — Vercel's official skill
+directory — which runs independent third-party security audits from three auditors: **Snyk**, **Socket**, and
+**Gen Agent Trust Hub**. Results appear alongside local scan output:
+
+```
+  ◆ skills.sh: 3 audits  [Snyk ✗]  [Socket ✓]  [Trust Hub ✗]
+    https://skills.sh/inference-sh-3/skills/agent-tools
+```
+
+- Green ✓ = auditor passed, Red ✗ = auditor failed, Dim ~ = no result yet
+- If any auditor returns a **Fail** verdict, severity is escalated to at least **High**, triggering a confirmation
+  prompt
+- skills.sh lookup runs in parallel with VT and never blocks installation on error (graceful fallback)
+- Only fires for GitHub-sourced skills that are listed on skills.sh — silent for everything else
+
 ### Optional: VirusTotal Integration
 
 When a [VirusTotal](https://www.virustotal.com/) API key is provided, the CLI also hashes each skill's content
@@ -306,10 +323,12 @@ pnpm format           # Format code with Prettier
 - `src/scanner.ts` — Rules engine. Defines ~81 regex rules across 8 threat categories, a correlation engine for
   multi-signal detection, and optional deep taint analysis integration. Supports loading external rules from JSON
   files via `--rules`.
-- `src/scanner-ui.ts` — Presentation layer. Displays findings by severity, runs optional VT lookups, handles
-  escalation logic and user confirmation prompts.
+- `src/scanner-ui.ts` — Presentation layer. Displays findings by severity, runs VT and skills.sh lookups in parallel,
+  handles escalation logic and user confirmation prompts.
 - `src/vt.ts` — VirusTotal API client. SHA-256 hashing, `GET /api/v3/files/{hash}` lookup, verdict mapping, graceful
   error handling.
+- `src/skills-sh.ts` — skills.sh audit client. Fetches and HTML-parses third-party audit results (Snyk, Socket, Gen
+  Agent Trust Hub) for GitHub-sourced skills with a 5-second timeout; always resolves gracefully.
 - `src/deep-scan/` — Deep taint analysis engine (enabled via `--deep-scan`). Regex-based tokenizers extract sources,
   sinks, and assignments from Python/JS/TS files; a forward taint tracker propagates data flow; a cross-file analyzer
   detects multi-file attack patterns via import graph analysis. See [docs/deep-scan.md](docs/deep-scan.md).
@@ -317,6 +336,13 @@ pnpm format           # Format code with Prettier
   well-known endpoints, legacy Mintlify).
 
 ## Changelog
+
+### 1.1.2
+
+- **skills.sh audit integration**: for GitHub-sourced skills, the CLI now fetches third-party audit results from
+  [skills.sh](https://skills.sh) (Snyk, Socket, Gen Agent Trust Hub) and displays them alongside local scan output
+- A skills.sh Fail verdict from any auditor escalates severity to at least High, triggering a confirmation prompt
+- Lookups run in parallel with VirusTotal and fail silently on any network or parse error
 
 ### 1.1.1
 
