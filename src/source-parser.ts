@@ -122,7 +122,18 @@ function isDirectSkillUrl(input: string): boolean {
  * Parse a source string into a structured format
  * Supports: local paths, GitHub URLs, GitLab URLs, GitHub shorthand, direct skill.md URLs, and direct git URLs
  */
+// Source aliases: map common shorthand to canonical source
+const SOURCE_ALIASES: Record<string, string> = {
+  'coinbase/agentWallet': 'coinbase/agentic-wallet-skills',
+};
+
 export function parseSource(input: string): ParsedSource {
+  // Resolve source aliases before parsing
+  const alias = SOURCE_ALIASES[input];
+  if (alias) {
+    input = alias;
+  }
+
   // Local path: absolute, relative, or current directory
   if (isLocalPath(input)) {
     const resolvedPath = resolve(input);

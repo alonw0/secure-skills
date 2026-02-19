@@ -14,6 +14,13 @@ const YELLOW = '\x1b[33m';
 // API endpoint for skills search
 const SEARCH_API_BASE = process.env.SKILLS_API_URL || 'https://skills.sh';
 
+function formatInstalls(count: number): string {
+  if (!count || count <= 0) return '';
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1).replace(/\.0$/, '')}M installs`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1).replace(/\.0$/, '')}K installs`;
+  return `${count} install${count === 1 ? '' : 's'}`;
+}
+
 export interface SearchSkill {
   name: string;
   slug: string;
@@ -112,9 +119,11 @@ async function runSearchPrompt(initialQuery = ''): Promise<SearchSkill | null> {
         const arrow = isSelected ? `${BOLD}>${RESET}` : ' ';
         const name = isSelected ? `${BOLD}${skill.name}${RESET}` : `${TEXT}${skill.name}${RESET}`;
         const source = skill.source ? ` ${DIM}${skill.source}${RESET}` : '';
+        const installs = formatInstalls(skill.installs);
+        const installsBadge = installs ? ` ${CYAN}${installs}${RESET}` : '';
         const loadingIndicator = loading && i === 0 ? ` ${DIM}...${RESET}` : '';
 
-        lines.push(`  ${arrow} ${name}${source}${loadingIndicator}`);
+        lines.push(`  ${arrow} ${name}${source}${installsBadge}${loadingIndicator}`);
       }
     }
 
@@ -276,7 +285,10 @@ ${DIM}  2) npx skills add <owner/repo@skill>${RESET}`;
 
     for (const skill of results.slice(0, 6)) {
       const pkg = skill.source || skill.slug;
-      console.log(`${TEXT}${pkg}@${skill.name}${RESET}`);
+      const installs = formatInstalls(skill.installs);
+      console.log(
+        `${TEXT}${pkg}@${skill.name}${RESET}${installs ? ` ${CYAN}${installs}${RESET}` : ''}`
+      );
       console.log(`${DIM}└ https://skills.sh/${skill.slug}${RESET}`);
       console.log();
     }

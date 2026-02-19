@@ -3,6 +3,10 @@
 A security-hardened fork of the [skills](https://github.com/vercel-labs/skills) CLI that scans agent skills for
 malicious content before installation.
 
+<!-- agent-list:start -->
+Supports **OpenCode**, **Claude Code**, **Codex**, **Cursor**, and [37 more](#available-agents).
+<!-- agent-list:end -->
+
 The open agent skills ecosystem makes it trivial to install third-party instruction sets into coding agents — but that
 same ease of installation is a vector for prompt injection, data exfiltration, and credential theft.
 [Snyk's analysis](https://snyk.io/blog/) of 3,984 published skills found that **13.4% had critical security issues** and
@@ -259,18 +263,19 @@ Supports **OpenCode**, **Claude Code**, **Codex**, **Cursor**, and [35 more](#su
 <!-- supported-agents:start -->
 | Agent | `--agent` | Project Path | Global Path |
 |-------|-----------|--------------|-------------|
-| Amp, Kimi Code CLI, Replit | `amp`, `kimi-cli`, `replit` | `.agents/skills/` | `~/.config/agents/skills/` |
+| Amp, Kimi Code CLI, Replit, Universal | `amp`, `kimi-cli`, `replit`, `universal` | `.agents/skills/` | `~/.config/agents/skills/` |
 | Antigravity | `antigravity` | `.agent/skills/` | `~/.gemini/antigravity/skills/` |
 | Augment | `augment` | `.augment/skills/` | `~/.augment/skills/` |
 | Claude Code | `claude-code` | `.claude/skills/` | `~/.claude/skills/` |
-| OpenClaw | `openclaw` | `skills/` | `~/.moltbot/skills/` |
+| OpenClaw | `openclaw` | `skills/` | `~/.openclaw/skills/` |
 | Cline | `cline` | `.cline/skills/` | `~/.cline/skills/` |
 | CodeBuddy | `codebuddy` | `.codebuddy/skills/` | `~/.codebuddy/skills/` |
 | Codex | `codex` | `.agents/skills/` | `~/.codex/skills/` |
 | Command Code | `command-code` | `.commandcode/skills/` | `~/.commandcode/skills/` |
 | Continue | `continue` | `.continue/skills/` | `~/.continue/skills/` |
+| Cortex Code | `cortex` | `.cortex/skills/` | `~/.snowflake/cortex/skills/` |
 | Crush | `crush` | `.crush/skills/` | `~/.config/crush/skills/` |
-| Cursor | `cursor` | `.cursor/skills/` | `~/.cursor/skills/` |
+| Cursor | `cursor` | `.agents/skills/` | `~/.cursor/skills/` |
 | Droid | `droid` | `.factory/skills/` | `~/.factory/skills/` |
 | Gemini CLI | `gemini-cli` | `.agents/skills/` | `~/.gemini/skills/` |
 | GitHub Copilot | `github-copilot` | `.agents/skills/` | `~/.copilot/skills/` |
@@ -298,7 +303,154 @@ Supports **OpenCode**, **Claude Code**, **Codex**, **Cursor**, and [35 more](#su
 | AdaL | `adal` | `.adal/skills/` | `~/.adal/skills/` |
 <!-- supported-agents:end -->
 
-The CLI automatically detects which coding agents you have installed.
+> [!NOTE]
+> **Kiro CLI users:** After installing skills, manually add them to your custom agent's `resources` in
+> `.kiro/agents/<agent>.json`:
+>
+> ```json
+> {
+>   "resources": ["skill://.kiro/skills/**/SKILL.md"]
+> }
+> ```
+
+The CLI automatically detects which coding agents you have installed. If none are detected, you'll be prompted to select
+which agents to install to.
+
+## Creating Skills
+
+Skills are directories containing a `SKILL.md` file with YAML frontmatter:
+
+```markdown
+---
+name: my-skill
+description: What this skill does and when to use it
+---
+
+# My Skill
+
+Instructions for the agent to follow when this skill is activated.
+
+## When to Use
+
+Describe the scenarios where this skill should be used.
+
+## Steps
+
+1. First, do this
+2. Then, do that
+```
+
+### Required Fields
+
+- `name`: Unique identifier (lowercase, hyphens allowed)
+- `description`: Brief explanation of what the skill does
+
+### Optional Fields
+
+- `metadata.internal`: Set to `true` to hide the skill from normal discovery. Internal skills are only visible and
+  installable when `INSTALL_INTERNAL_SKILLS=1` is set. Useful for work-in-progress skills or skills meant only for
+  internal tooling.
+
+```markdown
+---
+name: my-internal-skill
+description: An internal skill not shown by default
+metadata:
+  internal: true
+---
+```
+
+### Skill Discovery
+
+The CLI searches for skills in these locations within a repository:
+
+<!-- skill-discovery:start -->
+- Root directory (if it contains `SKILL.md`)
+- `skills/`
+- `skills/.curated/`
+- `skills/.experimental/`
+- `skills/.system/`
+- `.agents/skills/`
+- `.agent/skills/`
+- `.augment/skills/`
+- `.claude/skills/`
+- `./skills/`
+- `.cline/skills/`
+- `.codebuddy/skills/`
+- `.commandcode/skills/`
+- `.continue/skills/`
+- `.cortex/skills/`
+- `.crush/skills/`
+- `.factory/skills/`
+- `.goose/skills/`
+- `.junie/skills/`
+- `.iflow/skills/`
+- `.kilocode/skills/`
+- `.kiro/skills/`
+- `.kode/skills/`
+- `.mcpjam/skills/`
+- `.vibe/skills/`
+- `.mux/skills/`
+- `.openhands/skills/`
+- `.pi/skills/`
+- `.qoder/skills/`
+- `.qwen/skills/`
+- `.roo/skills/`
+- `.trae/skills/`
+- `.windsurf/skills/`
+- `.zencoder/skills/`
+- `.neovate/skills/`
+- `.pochi/skills/`
+- `.adal/skills/`
+<!-- skill-discovery:end -->
+
+### Plugin Manifest Discovery
+
+If `.claude-plugin/marketplace.json` or `.claude-plugin/plugin.json` exists, skills declared in those files are also discovered:
+
+```json
+// .claude-plugin/marketplace.json
+{
+  "metadata": { "pluginRoot": "./plugins" },
+  "plugins": [{
+    "name": "my-plugin",
+    "source": "my-plugin",
+    "skills": ["./skills/review", "./skills/test"]
+  }]
+}
+```
+
+This enables compatibility with the [Claude Code plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces) ecosystem.
+
+If no skills are found in standard locations, a recursive search is performed.
+
+## Compatibility
+
+Skills are generally compatible across agents since they follow a
+shared [Agent Skills specification](https://agentskills.io). However, some features may be agent-specific:
+
+| Feature         | OpenCode | OpenHands | Claude Code | Cline | CodeBuddy | Codex | Command Code | Kiro CLI | Cursor | Antigravity | Roo Code | Github Copilot | Amp | OpenClaw | Neovate | Pi  | Qoder | Zencoder |
+| --------------- | -------- | --------- | ----------- | ----- | --------- | ----- | ------------ | -------- | ------ | ----------- | -------- | -------------- | --- | -------- | ------- | --- | ----- | -------- |
+| Basic skills    | Yes      | Yes       | Yes         | Yes   | Yes       | Yes   | Yes          | Yes      | Yes    | Yes         | Yes      | Yes            | Yes | Yes      | Yes     | Yes | Yes   | Yes      |
+| `allowed-tools` | Yes      | Yes       | Yes         | Yes   | Yes       | Yes   | Yes          | No       | Yes    | Yes         | Yes      | Yes            | Yes | Yes      | Yes     | Yes | Yes   | No       |
+| `context: fork` | No       | No        | Yes         | No    | No        | No    | No           | No       | No     | No          | No       | No             | No  | No       | No      | No  | No    | No       |
+| Hooks           | No       | No        | Yes         | Yes   | No        | No    | No           | No       | No     | No          | No       | No             | No  | No       | No      | No  | No    | No       |
+
+## Troubleshooting
+
+### "No skills found"
+
+Ensure the repository contains valid `SKILL.md` files with both `name` and `description` in the frontmatter.
+
+### Skill not loading in agent
+
+- Verify the skill was installed to the correct path
+- Check the agent's documentation for skill loading requirements
+- Ensure the `SKILL.md` frontmatter is valid YAML
+
+### Permission errors
+
+Ensure you have write access to the target directory.
 
 ## Environment Variables
 
@@ -372,6 +524,37 @@ pnpm format           # Format code with Prettier
 - VirusTotal integration for optional secondary threat intelligence
 - URL transparency: all external URLs in skill files are shown before installation
 - Scanner rules informed by Snyk and ClawHavoc research
+
+## Links
+
+- [Agent Skills Specification](https://agentskills.io)
+- [Skills Directory](https://skills.sh)
+- [Amp Skills Documentation](https://ampcode.com/manual#agent-skills)
+- [Antigravity Skills Documentation](https://antigravity.google/docs/skills)
+- [Factory AI / Droid Skills Documentation](https://docs.factory.ai/cli/configuration/skills)
+- [Claude Code Skills Documentation](https://code.claude.com/docs/en/skills)
+- [OpenClaw Skills Documentation](https://docs.openclaw.ai/tools/skills)
+- [Cline Skills Documentation](https://docs.cline.bot/features/skills)
+- [CodeBuddy Skills Documentation](https://www.codebuddy.ai/docs/ide/Features/Skills)
+- [Codex Skills Documentation](https://developers.openai.com/codex/skills)
+- [Command Code Skills Documentation](https://commandcode.ai/docs/skills)
+- [Crush Skills Documentation](https://github.com/charmbracelet/crush?tab=readme-ov-file#agent-skills)
+- [Cursor Skills Documentation](https://cursor.com/docs/context/skills)
+- [Gemini CLI Skills Documentation](https://geminicli.com/docs/cli/skills/)
+- [GitHub Copilot Agent Skills](https://docs.github.com/en/copilot/concepts/agents/about-agent-skills)
+- [iFlow CLI Skills Documentation](https://platform.iflow.cn/en/cli/examples/skill)
+- [Kimi Code CLI Skills Documentation](https://moonshotai.github.io/kimi-cli/en/customization/skills.html)
+- [Kiro CLI Skills Documentation](https://kiro.dev/docs/cli/custom-agents/configuration-reference/#skill-resources)
+- [Kode Skills Documentation](https://github.com/shareAI-lab/kode/blob/main/docs/skills.md)
+- [OpenCode Skills Documentation](https://opencode.ai/docs/skills)
+- [Qwen Code Skills Documentation](https://qwenlm.github.io/qwen-code-docs/en/users/features/skills/)
+- [OpenHands Skills Documentation](https://docs.openhands.ai/modules/usage/how-to/using-skills)
+- [Pi Skills Documentation](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md)
+- [Qoder Skills Documentation](https://docs.qoder.com/cli/Skills)
+- [Replit Skills Documentation](https://docs.replit.com/replitai/skills)
+- [Roo Code Skills Documentation](https://docs.roocode.com/features/skills)
+- [Trae Skills Documentation](https://docs.trae.ai/ide/skills)
+- [Vercel Agent Skills Repository](https://github.com/vercel-labs/agent-skills)
 
 ## Research
 
