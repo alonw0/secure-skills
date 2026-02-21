@@ -3,8 +3,7 @@ import pc from 'picocolors';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { sep } from 'path';
-import { parseSource, getOwnerRepo, parseOwnerRepo } from './source-parser.ts';
-import type { SkillsShSource } from './skills-sh.ts';
+import { parseSource, getOwnerRepo } from './source-parser.ts';
 import { searchMultiselect, cancelSymbol } from './prompts/search-multiselect.ts';
 
 // Helper to check if a value is a cancel symbol (works with both clack and our custom prompts)
@@ -28,13 +27,6 @@ import {
   getNonUniversalAgents,
   isUniversalAgent,
 } from './agents.ts';
-import {
-  fetchAuditData,
-  type AuditResponse,
-  type SkillAuditData,
-  type PartnerAudit,
-} from './telemetry.ts';
-
 import { findProvider, wellKnownProvider, type WellKnownSkill } from './providers/index.ts';
 import { fetchMintlifySkill } from './mintlify.ts';
 import {
@@ -72,119 +64,22 @@ function resolveExternalRules(options: AddOptions): ScanRule[] | undefined {
 }
 
 /**
- * Build a skills.sh source map for a single remote skill fetched via a provider.
- * Returns a map with one entry when the sourceUrl is a github.com URL, otherwise undefined.
- * The skill folder is derived from the last meaningful path segment of sourceUrl,
- * falling back to the install name.
+ * Extract owner/repo from a GitHub source URL for audit lookups.
+ * Returns undefined for non-GitHub URLs.
  */
-function buildSkillsShSourcesForRemote(
-  remoteSkill: RemoteSkill,
-  _url: string
-): Map<string, SkillsShSource> | undefined {
-  const sourceUrl = remoteSkill.sourceUrl;
-  if (!sourceUrl || !sourceUrl.includes('github.com')) return undefined;
-
+function extractAuditSource(sourceUrl: string | undefined): string | undefined {
+  if (!sourceUrl?.includes('github.com')) return undefined;
   try {
-    const parsed = new URL(sourceUrl);
-    const path = parsed.pathname.slice(1).replace(/\.git$/, '');
-    const parts = path.split('/').filter(Boolean);
-    const ownerRepo = parseOwnerRepo(parts.slice(0, 2).join('/'));
-    if (!ownerRepo) return undefined;
-
-    // Use the last meaningful path segment if there's a subpath, otherwise installName
-    const skillFolder = parts.length > 2 ? parts.at(-1)! : remoteSkill.installName;
-
-    const sources = new Map<string, SkillsShSource>();
-    sources.set(remoteSkill.installName, { ...ownerRepo, skillFolder });
-    return sources;
+    const parts = new URL(sourceUrl).pathname
+      .slice(1)
+      .replace(/\.git$/, '')
+      .split('/')
+      .filter(Boolean);
+    if (parts.length < 2) return undefined;
+    return parts.slice(0, 2).join('/');
   } catch {
     return undefined;
   }
-}
-
-// ─── Security Advisory ───
-
-function riskLabel(risk: string): string {
-  switch (risk) {
-    case 'critical':
-      return pc.red(pc.bold('Critical Risk'));
-    case 'high':
-      return pc.red('High Risk');
-    case 'medium':
-      return pc.yellow('Med Risk');
-    case 'low':
-      return pc.green('Low Risk');
-    case 'safe':
-      return pc.green('Safe');
-    default:
-      return pc.dim('--');
-  }
-}
-
-function socketLabel(audit: PartnerAudit | undefined): string {
-  if (!audit) return pc.dim('--');
-  const count = audit.alerts ?? 0;
-  return count > 0 ? pc.red(`${count} alert${count !== 1 ? 's' : ''}`) : pc.green('0 alerts');
-}
-
-/** Pad a string to a given visible width (ignoring ANSI escape codes). */
-function padEnd(str: string, width: number): string {
-  // Strip ANSI codes to measure visible length
-  const visible = str.replace(/\x1b\[[0-9;]*m/g, '');
-  const pad = Math.max(0, width - visible.length);
-  return str + ' '.repeat(pad);
-}
-
-/**
- * Render a compact security table showing partner audit results.
- * Returns the lines to display, or empty array if no data.
- */
-function buildSecurityLines(
-  auditData: AuditResponse | null,
-  skills: Array<{ slug: string; displayName: string }>,
-  source: string
-): string[] {
-  if (!auditData) return [];
-
-  // Check if we have any audit data at all
-  const hasAny = skills.some((s) => {
-    const data = auditData[s.slug];
-    return data && Object.keys(data).length > 0;
-  });
-  if (!hasAny) return [];
-
-  // Compute column width for skill names
-  const nameWidth = Math.min(Math.max(...skills.map((s) => s.displayName.length)), 36);
-
-  // Header
-  const lines: string[] = [];
-  const header =
-    padEnd('', nameWidth + 2) +
-    padEnd(pc.dim('Gen'), 18) +
-    padEnd(pc.dim('Socket'), 18) +
-    pc.dim('Snyk');
-  lines.push(header);
-
-  // Rows
-  for (const skill of skills) {
-    const data = auditData[skill.slug];
-    const name =
-      skill.displayName.length > nameWidth
-        ? skill.displayName.slice(0, nameWidth - 1) + '\u2026'
-        : skill.displayName;
-
-    const ath = data?.ath ? riskLabel(data.ath.risk) : pc.dim('--');
-    const socket = data?.socket ? socketLabel(data.socket) : pc.dim('--');
-    const snyk = data?.snyk ? riskLabel(data.snyk.risk) : pc.dim('--');
-
-    lines.push(padEnd(pc.cyan(name), nameWidth + 2) + padEnd(ath, 18) + padEnd(socket, 18) + snyk);
-  }
-
-  // Footer link
-  lines.push('');
-  lines.push(`${pc.dim('Details:')} ${pc.dim(`https://skills.sh/${source}`)}`);
-
-  return lines;
 }
 
 /**
@@ -683,13 +578,13 @@ async function handleRemoteSkill(
     const skillContents = vtKey
       ? new Map([[remoteSkill.installName, remoteSkill.content]])
       : undefined;
-    const skillsShSources = buildSkillsShSourcesForRemote(remoteSkill, url);
+    const auditSource = extractAuditSource(remoteSkill.sourceUrl);
     if (
       !(await presentScanResults([scanResult], {
         yes: options.yes,
         vtKey,
         skillContents,
-        skillsShSources,
+        auditSource,
       }))
     ) {
       p.cancel('Installation cancelled due to security concerns');
@@ -1733,15 +1628,7 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
       selectedSkills = selected as Skill[];
     }
 
-    // Kick off security audit fetch early (non-blocking) so it runs
-    // in parallel with agent selection, scope, and mode prompts.
-    const ownerRepoForAudit = getOwnerRepo(parsed);
-    const auditPromise = ownerRepoForAudit
-      ? fetchAuditData(
-          ownerRepoForAudit,
-          selectedSkills.map((s) => getSkillDisplayName(s))
-        )
-      : Promise.resolve(null);
+    const auditSource = getOwnerRepo(parsed) ?? undefined;
 
     let targetAgents: AgentType[];
     const validAgents = Object.keys(agents);
@@ -1941,53 +1828,18 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
       }
       spinner.stop('Security scan complete');
 
-      // Build skills.sh sources for GitHub-sourced skills
-      const skillsShSources = new Map<string, SkillsShSource>();
-      if (parsed.type === 'github') {
-        const ownerRepoStr = getOwnerRepo(parsed);
-        const ownerRepo = ownerRepoStr ? parseOwnerRepo(ownerRepoStr) : null;
-        if (ownerRepo) {
-          for (const skill of selectedSkills) {
-            const displayName = getSkillDisplayName(skill);
-            const skillFolder = skill.path.split('/').at(-1) ?? skill.name;
-            skillsShSources.set(displayName, { ...ownerRepo, skillFolder });
-          }
-        }
-      }
-
       if (
         !(await presentScanResults(scanResults, {
           yes: options.yes,
           vtKey,
           skillContents,
-          skillsShSources: skillsShSources.size > 0 ? skillsShSources : undefined,
+          auditSource,
         }))
       ) {
         p.cancel('Installation cancelled due to security concerns');
         await cleanup(tempDir);
         process.exit(0);
       }
-    }
-
-    // Await and display security audit results (started earlier in parallel)
-    // Wrapped in try/catch so a failed audit fetch never blocks installation.
-    try {
-      const auditData = await auditPromise;
-      if (auditData && ownerRepoForAudit) {
-        const securityLines = buildSecurityLines(
-          auditData,
-          selectedSkills.map((s) => ({
-            slug: getSkillDisplayName(s),
-            displayName: getSkillDisplayName(s),
-          })),
-          ownerRepoForAudit
-        );
-        if (securityLines.length > 0) {
-          p.note(securityLines.join('\n'), 'Security Risk Assessments');
-        }
-      }
-    } catch {
-      // Silently skip — security info is advisory only
     }
 
     if (!options.yes) {

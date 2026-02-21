@@ -489,12 +489,27 @@ pnpm format           # Format code with Prettier
 
 ## Changelog
 
+### 1.1.3
+
+- **Synced with upstream** ([vercel-labs/skills](https://github.com/vercel-labs/skills)): universal agent support
+  (`.agents/skills/` as a single install target symlinked across agents), new agents (Cortex Code, and others), Kiro CLI
+  note, Creating Skills docs, Compatibility table, Troubleshooting section, agent-list badge
+- **Replaced HTML scraping with structured API**: third-party audit now uses the `add-skill.vercel.sh/audit` JSON
+  endpoint instead of scraping `skills.sh` HTML — more reliable and richer data (risk levels + alert counts per auditor)
+- **Stronger blocking**: critical and high risk from the API both always prompt for confirmation; `--yes` is ignored for
+  both (previously high was bypassed by `--yes` and critical only prompted rather than blocked)
+- **Audit failure warning**: if the skills.sh API is unreachable, a yellow warning is shown rather than silently
+  skipping — local scan still runs regardless
+- Removed duplicate audit display (previously showed both an inline scan note and a separate "Security Risk Assessments"
+  panel for the same data)
+
 ### 1.1.2
 
 - **skills.sh audit integration**: for GitHub-sourced skills, the CLI now fetches third-party audit results from
   [skills.sh](https://skills.sh) (Snyk, Socket, Gen Agent Trust Hub) and displays them alongside local scan output
-- A skills.sh Fail verdict from any auditor escalates severity to at least High, triggering a confirmation prompt
-- Lookups run in parallel with VirusTotal and fail silently on any network or parse error
+- Critical or High risk from any auditor escalates the install gate — critical always prompts even with `--yes`, high
+  blocks unless `--yes` is set; uses the structured skills.sh JSON API instead of HTML scraping
+- Audit runs in parallel with VirusTotal and fails silently on any network or parse error
 
 ### 1.1.1
 

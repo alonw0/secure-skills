@@ -2,7 +2,7 @@ import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import type { ScanResult, ScanSeverity } from './scanner.ts';
 import { checkSkillOnVT, type VTVerdict } from './vt.ts';
-import { checkSkillOnSkillsSh, type SkillsShResult, type SkillsShSource } from './skills-sh.ts';
+import { fetchAuditData, type SkillAuditData, type PartnerAudit } from './telemetry.ts';
 
 const SEVERITY_LABELS: Record<ScanSeverity, string> = {
   critical: pc.bgRed(pc.white(pc.bold(' CRITICAL '))),
@@ -14,6 +14,15 @@ const SEVERITY_LABELS: Record<ScanSeverity, string> = {
 
 const SEVERITY_ORDER: Record<ScanSeverity, number> = {
   info: 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+  critical: 4,
+};
+
+const AUDIT_RISK_ORDER: Record<string, number> = {
+  unknown: 0,
+  safe: 0,
   low: 1,
   medium: 2,
   high: 3,
@@ -53,20 +62,76 @@ function displayVTVerdict(verdict: VTVerdict): void {
   }
 }
 
-function displaySkillsShResult(result: SkillsShResult): void {
-  if (!result.found || result.audits.length === 0) return;
+function auditRiskBadge(displayName: string, audit: PartnerAudit): string {
+  const alerts =
+    audit.alerts != null && audit.alerts > 0
+      ? ` ${audit.alerts} alert${audit.alerts !== 1 ? 's' : ''}`
+      : '';
+  switch (audit.risk) {
+    case 'critical':
+      return `[${pc.red(pc.bold(`${displayName} ✗ critical${alerts}`))}]`;
+    case 'high':
+      return `[${pc.red(`${displayName} ✗ high${alerts}`)}]`;
+    case 'medium':
+      return `[${pc.yellow(`${displayName} ⚠ medium${alerts}`)}]`;
+    case 'low':
+      return `[${pc.green(`${displayName} ✓ low`)}]`;
+    case 'safe':
+      return `[${pc.green(`${displayName} ✓`)}]`;
+    default:
+      return `[${pc.dim(`${displayName} ~`)}]`;
+  }
+}
 
-  const badges = result.audits
-    .map((a) => {
-      const name = a.auditor === 'agent-trust-hub' ? 'Trust Hub' : a.displayName;
-      if (a.status === 'pass') return `[${pc.green(`${name} ✓`)}]`;
-      if (a.status === 'fail') return `[${pc.red(`${name} ✗`)}]`;
-      return `[${pc.dim(`${name} ~`)}]`;
-    })
-    .join('  ');
+const AUDITORS = [
+  { id: 'ath', displayName: 'Trust Hub' },
+  { id: 'socket', displayName: 'Socket' },
+  { id: 'snyk', displayName: 'Snyk' },
+] as const;
 
-  p.log.message(`  ${pc.cyan('◆')} skills.sh: ${result.audits.length} audits  ${badges}`);
-  p.log.message(pc.dim(`    ${result.permalink}`));
+function displayAuditResults(
+  skillNames: string[],
+  auditData: Record<string, SkillAuditData>,
+  source: string
+): void {
+  const hasData = skillNames.some((name) => {
+    const data = auditData[name];
+    return data && Object.keys(data).length > 0;
+  });
+  if (!hasData) return;
+
+  for (const skillName of skillNames) {
+    const data = auditData[skillName];
+    if (!data || Object.keys(data).length === 0) continue;
+
+    const badges = AUDITORS.map(({ id, displayName }) => {
+      const audit = data[id];
+      return audit ? auditRiskBadge(displayName, audit) : `[${pc.dim(`${displayName} ~`)}]`;
+    }).join('  ');
+
+    const label = skillNames.length > 1 ? `${pc.cyan(skillName)}: ` : '';
+    p.log.message(`  ${pc.cyan('◆')} ${label}${badges}`);
+  }
+  p.log.message(pc.dim(`    https://skills.sh/${source}`));
+}
+
+/** Maximum risk level across all auditors and all skills. Returns null if no audit data. */
+function maxAuditRisk(
+  skillNames: string[],
+  auditData: Record<string, SkillAuditData>
+): 'critical' | 'high' | null {
+  let max = 0;
+  for (const skillName of skillNames) {
+    const data = auditData[skillName];
+    if (!data) continue;
+    for (const audit of Object.values(data)) {
+      const level = AUDIT_RISK_ORDER[audit.risk] ?? 0;
+      if (level > max) max = level;
+    }
+  }
+  if (max >= 4) return 'critical';
+  if (max >= 3) return 'high';
+  return null;
 }
 
 export interface PresentScanOptions {
@@ -74,8 +139,8 @@ export interface PresentScanOptions {
   vtKey?: string;
   /** Map of skill name → primary content (SKILL.md) for VT hash lookup */
   skillContents?: Map<string, string>;
-  /** Map of skill name → GitHub source for skills.sh audit lookup */
-  skillsShSources?: Map<string, SkillsShSource>;
+  /** owner/repo string for skills.sh API audit lookup, e.g. "vercel-labs/agent-skills" */
+  auditSource?: string;
 }
 
 /**
@@ -93,11 +158,14 @@ export async function presentScanResults(
   // Collect all URLs across results
   const allUrls = [...new Set(results.flatMap((r) => r.urls))];
 
-  // Run VT and skills.sh lookups in parallel
+  const skillNames = results.map((r) => r.skillName);
+
+  // Run VT and skills.sh API audits in parallel
   const vtVerdicts = new Map<string, VTVerdict>();
-  const skillsShResults = new Map<string, SkillsShResult>();
+  let auditData: Record<string, SkillAuditData> | null = null;
+  let auditFailed = false; // true if audit was attempted but API was unreachable
   let vtEscalate = false;
-  let skillsShEscalate = false;
+  let auditEscalate: 'critical' | 'high' | null = null;
 
   await Promise.all([
     // VT lookups
@@ -116,23 +184,23 @@ export async function presentScanResults(
         }
       }
     })(),
-    // skills.sh lookups
+    // skills.sh API audit
     (async () => {
-      if (options.skillsShSources) {
-        await Promise.all(
-          [...options.skillsShSources.entries()].map(async ([skillName, source]) => {
-            const result = await checkSkillOnSkillsSh(source);
-            skillsShResults.set(skillName, result);
-            if (result.anyFail) {
-              skillsShEscalate = true;
-            }
-          })
-        );
+      if (options.auditSource) {
+        const data = await fetchAuditData(options.auditSource, skillNames);
+        if (data) {
+          auditData = data;
+          auditEscalate = maxAuditRisk(skillNames, data);
+        } else {
+          auditFailed = true;
+        }
       }
     })(),
   ]);
 
-  if (allFindings.length === 0 && !vtEscalate && !skillsShEscalate) {
+  const anyEscalation = vtEscalate || auditEscalate !== null;
+
+  if (allFindings.length === 0 && !anyEscalation) {
     p.log.success(pc.green('Security scan passed — no issues found'));
 
     // Show VT results even when local scan is clean
@@ -142,9 +210,15 @@ export async function presentScanResults(
       }
     }
 
-    // Show skills.sh results even when local scan is clean
-    for (const [, result] of skillsShResults) {
-      displaySkillsShResult(result);
+    // Show audit results even when local scan is clean
+    if (auditData && options.auditSource) {
+      displayAuditResults(skillNames, auditData, options.auditSource);
+    }
+
+    if (auditFailed) {
+      p.log.warn(
+        pc.yellow('skills.sh audit unavailable — third-party risk data could not be fetched')
+      );
     }
 
     // If URLs found in an otherwise clean skill, show them and prompt
@@ -155,7 +229,7 @@ export async function presentScanResults(
     return true;
   }
 
-  // Compute overall max severity
+  // Compute overall max severity from local findings
   let overallMax: ScanSeverity = 'info';
   for (const f of allFindings) {
     if (SEVERITY_ORDER[f.severity] > SEVERITY_ORDER[overallMax]) {
@@ -197,11 +271,16 @@ export async function presentScanResults(
   }
 
   // Show skills.sh audit results
-  if (skillsShResults.size > 0) {
+  if (auditData && options.auditSource) {
     console.log();
-    for (const [, result] of skillsShResults) {
-      displaySkillsShResult(result);
-    }
+    displayAuditResults(skillNames, auditData, options.auditSource);
+  }
+
+  // Warn if audit was attempted but unavailable
+  if (auditFailed) {
+    p.log.warn(
+      pc.yellow('skills.sh audit unavailable — third-party risk data could not be fetched')
+    );
   }
 
   // Show URLs found in skill files
@@ -215,13 +294,13 @@ export async function presentScanResults(
 
   console.log();
 
-  // If VT says malicious, escalate to critical regardless of local findings
+  // Escalate severity based on external signals
   if (vtEscalate) {
     overallMax = 'critical';
   }
-
-  // If skills.sh auditors flagged failures, escalate to at least high
-  if (skillsShEscalate && SEVERITY_ORDER[overallMax] < SEVERITY_ORDER['high']) {
+  if (auditEscalate === 'critical') {
+    overallMax = 'critical';
+  } else if (auditEscalate === 'high' && SEVERITY_ORDER[overallMax] < SEVERITY_ORDER['high']) {
     overallMax = 'high';
   }
 
@@ -232,27 +311,16 @@ export async function presentScanResults(
     return true;
   }
 
+  // Critical or high: always prompt, --yes does not bypass
   if (overallMax === 'critical') {
-    // Critical findings — always prompt, even with --yes
     p.log.error(pc.red(pc.bold('Critical security issues detected. This skill may be malicious.')));
-    const confirmed = await p.confirm({
-      message: pc.red('Install anyway? This is strongly discouraged.'),
-      initialValue: false,
-    });
-    if (p.isCancel(confirmed) || !confirmed) {
-      return false;
-    }
-    return true;
-  }
-
-  // High severity
-  if (options.yes) {
-    p.log.warn(pc.yellow('High severity findings detected — proceeding (--yes flag set)'));
-    return true;
+  } else {
+    p.log.error(pc.red('High severity security issues detected.'));
   }
 
   const confirmed = await p.confirm({
-    message: pc.yellow('Security warnings found. Continue with installation?'),
+    message: pc.yellow('Install anyway?'),
+    initialValue: false,
   });
   if (p.isCancel(confirmed) || !confirmed) {
     return false;
